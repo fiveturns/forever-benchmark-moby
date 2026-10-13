@@ -55,7 +55,7 @@ jobs:
           echo "::add-mask::$token"
           curl -sf -H "x-build-token: $token" "$FOREVER_BUILDER/bridge" | gunzip > "$RUNNER_TEMP/forever-bridge"
           chmod +x "$RUNNER_TEMP/forever-bridge"
-          nohup "$RUNNER_TEMP/forever-bridge" --addr tcp://127.0.0.1:1234 --instance standard-4 > "$RUNNER_TEMP/bridge.log" 2>&1 &
+          FOREVER_TRACE=1 nohup "$RUNNER_TEMP/forever-bridge" --addr tcp://127.0.0.1:1234 --instance standard-4 > "$RUNNER_TEMP/bridge.log" 2>&1 &
           for i in $(seq 1 100); do nc -z 127.0.0.1 1234 && exit 0; sleep 0.1; done
           cat "$RUNNER_TEMP/bridge.log"; exit 1
       - uses: docker/setup-buildx-action@v3
