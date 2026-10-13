@@ -1,0 +1,70 @@
+# One moby/moby commit, built two ways on the same kind of runner. Run it for
+# the commits Depot's benchmark built, oldest first (each build's cache is the
+# one before's).
+name: Benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      upstream:
+        description: The moby/moby commit to build
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DOCKER_BUILD_SUMMARY: false
+  DOCKER_BUILD_RECORD_UPLOAD: false
+
+jobs:
+  build-with-docker:
+    name: Build with Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: moby/moby
+          ref: ${{ inputs.upstream }}
+          path: upstream
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./upstream
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-with-forever:
+    name: Build with Forever
+    runs-on: ubuntu-latest
+    env:
+      FOREVER_BUILDER: https://fvol-image-builder.fiveturns.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: moby/moby
+          ref: ${{ inputs.upstream }}
+          path: upstream
+      - name: Start Forever's bridge
+        run: |
+          # This run's token: its GitHub ID token, exchanged with the builder
+          # (the bridge exchanges its own the same way).
+          id=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$FOREVER_BUILDER" | jq -r .value)
+          echo "::add-mask::$id"
+          token=$(jq -n --arg t "$id" '{token: $t}' | curl -sf -H 'content-type: application/json' --data-binary @- "$FOREVER_BUILDER/token/oidc" | jq -r .token)
+          echo "::add-mask::$token"
+          curl -sf -H "x-build-token: $token" "$FOREVER_BUILDER/bridge" | gunzip > "$RUNNER_TEMP/forever-bridge"
+          chmod +x "$RUNNER_TEMP/forever-bridge"
+          nohup "$RUNNER_TEMP/forever-bridge" --addr tcp://127.0.0.1:1234 --instance standard-4 > "$RUNNER_TEMP/bridge.log" 2>&1 &
+          for i in $(seq 1 100); do nc -z 127.0.0.1 1234 && exit 0; sleep 0.1; done
+          cat "$RUNNER_TEMP/bridge.log"; exit 1
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: remote
+          endpoint: tcp://127.0.0.1:1234
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./upstream
+      - name: The bridge's log
+        if: always()
+        run: cat "$RUNNER_TEMP/bridge.log"
