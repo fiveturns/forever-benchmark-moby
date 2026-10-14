@@ -1,0 +1,38 @@
+# How long sealing Moby's source into a volume takes from a GitHub runner,
+# into the control plane's European store and its US one: a first seal,
+# then a fresh checkout's (every file's time new).
+name: Seal latency
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  seal:
+    runs-on: ubuntu-latest
+    env:
+      FOREVER_BUILDER: https://fvol-image-builder.fiveturns.workers.dev
+      VCP: https://fvol-control-test.fiveturns.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: moby/moby
+          path: upstream
+      - name: Seal, each store
+        run: |
+          idt() { curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$1" | jq -r .value; }
+          id=$(idt "$FOREVER_BUILDER"); echo "::add-mask::$id"
+          token=$(jq -n --arg t "$id" '{token: $t}' | curl -sf -H 'content-type: application/json' --data-binary @- "$FOREVER_BUILDER/token/oidc" | jq -r .token); echo "::add-mask::$token"
+          curl -sf -H "x-build-token: $token" "$FOREVER_BUILDER/fvol" | gunzip > "$RUNNER_TEMP/fvol"; chmod +x "$RUNNER_TEMP/fvol"
+          export FVOL_ID_TOKEN=$(idt "$VCP"); echo "::add-mask::$FVOL_ID_TOKEN"
+          rm -rf upstream/.git
+          for store in "$VCP" "$VCP/v1/stores/us"; do
+            vol=bench-seal-$GITHUB_RUN_ID
+            f() { "$RUNNER_TEMP/fvol" --store "$store" --cache "$RUNNER_TEMP/c-$1" --json "${@:2}"; }
+            f a volume create $vol --keep-last 2 --keep-days 0 --idle-days 1 > /dev/null || true
+            t=$(date +%s.%N); f b seal upstream --ref $vol | jq -c '{newStoredBytes, newObjects}'; echo "$store first seal: $(echo "$(date +%s.%N) - $t" | bc) s"
+            find upstream -exec touch {} +
+            t=$(date +%s.%N); f c seal upstream --ref $vol | jq -c '{newStoredBytes, newObjects}'; echo "$store fresh checkout's seal: $(echo "$(date +%s.%N) - $t" | bc) s"
+          done
