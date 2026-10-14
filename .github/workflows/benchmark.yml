@@ -8,6 +8,9 @@ on:
       upstream:
         description: The moby/moby commit to build
         required: true
+      cache:
+        description: Docker's GitHub Actions cache scope (a replay starts its own; Forever's scope is the run's branch)
+        default: buildkit
 
 permissions:
   contents: read
@@ -31,8 +34,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ./upstream
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ inputs.cache }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.cache }}
 
   build-with-forever:
     name: Build with Forever
